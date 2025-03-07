@@ -46,6 +46,10 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
     exportContoursRequested = pyqtSignal()
     exportLaserRequested = pyqtSignal()
     
+    # New signals for settings changes
+    paperSizeChanged = pyqtSignal()
+    scaleChanged = pyqtSignal()
+    
     def __init__(self, iface, parent=None):
         """Constructor."""
         super(TerrainModelDialog, self).__init__(parent)
@@ -95,6 +99,11 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         self.cmb_paper_size.currentIndexChanged.connect(self.on_paper_size_changed)
         self.radio_portrait.toggled.connect(self.on_orientation_changed)
         self.radio_landscape.toggled.connect(self.on_orientation_changed)
+        
+        # Connect settings change signals
+        self.txt_width.textChanged.connect(self.on_settings_changed)
+        self.txt_height.textChanged.connect(self.on_settings_changed)
+        self.txt_scale.textChanged.connect(self.on_settings_changed)
         
     def setup_paper_sizes(self):
         """Set up standard paper sizes in the combo box"""
@@ -159,6 +168,9 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
             if index == 0:  # Only clear if actually selecting "Custom"
                 self.txt_width.clear()
                 self.txt_height.clear()
+        
+        # Emit settings changed signal
+        self.paperSizeChanged.emit()
     
     def on_orientation_changed(self, checked):
         """Handle orientation change"""
@@ -175,6 +187,29 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
                     self.txt_height.setText(str(width))
             except (ValueError, TypeError):
                 pass  # Do nothing if conversion fails
+        
+        # Emit settings changed signal
+        self.paperSizeChanged.emit()
+    
+    def on_settings_changed(self):
+        """Handle any settings change that would affect rectangle size"""
+        # Avoid emitting signals during initialization or validation errors
+        try:
+            # Validate inputs
+            width = float(self.txt_width.text())
+            height = float(self.txt_height.text())
+            scale = int(self.txt_scale.text())
+            
+            # Only emit if we have valid values
+            if width > 0 and height > 0 and scale > 0:
+                # Determine which signal to emit based on sender
+                sender = self.sender()
+                if sender == self.txt_scale:
+                    self.scaleChanged.emit()
+                else:
+                    self.paperSizeChanged.emit()
+        except (ValueError, TypeError):
+            pass  # Ignore validation errors
     
     def on_place_rectangle_clicked(self):
         """Handle place rectangle button click"""

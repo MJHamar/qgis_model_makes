@@ -43,6 +43,8 @@ from qgis.core import (
     QgsLayoutExporter,
     QgsUnitTypes,
     QgsPrintLayout,
+    QgsDistanceArea,
+    QgsTextFormat,
     Qgis
 )
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsMapToolEmitPoint, QgsMapToolPan
@@ -96,6 +98,7 @@ class TerrainModelMaker:
         self.rectangle_tool = None
         self.rubber_band = None
         self.rectangle = None
+        self.rectangle_center = None
         
         # Initialize layout
         self.layout = None
@@ -103,6 +106,7 @@ class TerrainModelMaker:
         
         # Save state
         self.last_directory = None
+        self.dlg = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -250,6 +254,48 @@ class TerrainModelMaker:
         self.dlg.exportContoursRequested.connect(self.export_contours)
         self.dlg.exportLaserRequested.connect(self.export_laser_cut)
         
+        # Connect to new settings change signals
+        self.dlg.paperSizeChanged.connect(self.on_settings_changed)
+        self.dlg.scaleChanged.connect(self.on_settings_changed)
+    
+    def on_settings_changed(self):
+        """Handle changes in paper size or scale"""
+        # Only update if we have an existing rectangle
+        if self.rectangle and self.rectangle_center:
+            # Update the rectangle with new dimensions
+            self.update_rectangle_dimensions()
+    
+    def update_rectangle_dimensions(self):
+        """Update the rectangle dimensions based on current settings"""
+        # Get settings from dialog
+        settings = self.dlg.get_settings()
+        if not settings:
+            return
+        
+        # Calculate new dimensions
+        paper_width_mm = settings['paper_width']
+        paper_height_mm = settings['paper_height']
+        scale = settings['scale']
+        
+        # Convert mm to meters and apply scale
+        rect_width_m = (paper_width_mm / 1000.0) * scale  # Real-world width in meters
+        rect_height_m = (paper_height_mm / 1000.0) * scale  # Real-world height in meters
+        
+        # Update the rectangle tool if it exists
+        if self.rectangle_tool and isinstance(self.rectangle_tool, FixedSizeRectangleTool):
+            self.rectangle_tool.width_m = rect_width_m
+            self.rectangle_tool.height_m = rect_height_m
+            
+            # Recreate the rectangle at the same center
+            self.rectangle_tool.create_rectangle_at_point(self.rectangle_center)
+            
+            # Update rectangle info in the dialog
+            canvas = self.iface.mapCanvas()
+            crs = canvas.mapSettings().destinationCrs()
+            width, height, area = calculate_rectangle_dimensions(self.rectangle, crs)
+            self.dlg.set_rectangle_info(width, height)
+            self.dlg.set_status(f"Rectangle updated. Width: {width:.2f}m, Height: {height:.2f}m, Area: {area:.2f}m²")
+        
     def activate_rectangle_tool(self):
         """Activate the rectangle selection tool"""
         # Get settings from dialog
@@ -286,12 +332,14 @@ class TerrainModelMaker:
         self.iface.mapCanvas().setMapTool(self.rectangle_tool)
         self.dlg.set_status(f"Click on the map to place a {rect_width_m:.1f}m × {rect_height_m:.1f}m rectangle (based on scale 1:{scale})")
         
-    def set_rectangle(self, rectangle):
+    def set_rectangle(self, rectangle, center_point):
         """Set the selected rectangle
         
         :param rectangle: QgsRectangle representing the selection
+        :param center_point: QgsPointXY representing the center of the rectangle
         """
         self.rectangle = rectangle
+        self.rectangle_center = center_point
         
         # Calculate dimensions
         canvas = self.iface.mapCanvas()
@@ -308,6 +356,7 @@ class TerrainModelMaker:
             self.rubber_band.reset()
             
         self.rectangle = None
+        self.rectangle_center = None
         
         # Stop rectangle tool
         if self.rectangle_tool:
@@ -344,38 +393,20 @@ class TerrainModelMaker:
         )
         layout.pageCollection().pages()[0].setPageSize(page_size)
         
-        # Add a map item
+        # Add a map item that covers the entire page
         map_item = QgsLayoutItemMap(layout)
-        map_item.attemptSetSceneRect(QRectF(20, 20, settings['paper_width'] - 40, settings['paper_height'] - 40))
-        map_item.setFrameEnabled(True)
+        map_item.attemptSetSceneRect(QRectF(0, 0, settings['paper_width'], settings['paper_height']))
+        map_item.setFrameEnabled(False)  # No frame around the map
         
         # Set the map extent to our rectangle
         map_item.setExtent(self.rectangle)
         
+        # Explicitly set the scale to match the settings
+        target_scale = settings['scale']
+        map_item.setScale(target_scale)
+        
         # Add the map to the layout
         layout.addLayoutItem(map_item)
-        
-        # Add scale bar
-        scale_bar = QgsLayoutItemScaleBar(layout)
-        scale_bar.setStyle('Single Box')
-        scale_bar.setUnits(QgsUnitTypes.DistanceMeters)
-        scale_bar.setNumberOfSegments(5)
-        scale_bar.setNumberOfSegmentsLeft(0)
-        scale_bar.setUnitsPerSegment(100)
-        scale_bar.setLinkedMap(map_item)
-        scale_bar.setUnitLabel('m')
-        scale_bar.setFrameEnabled(True)
-        scale_bar.attemptSetSceneRect(QRectF(20, settings['paper_height'] - 30, 80, 20))
-        layout.addLayoutItem(scale_bar)
-        
-        # Add title
-        title = QgsLayoutItemLabel(layout)
-        title.setText(f"Terrain Model - Scale 1:{settings['scale']}")
-        title.setFont(QFont('Arial', 14))
-        title.adjustSizeToText()
-        title.attemptSetSceneRect(QRectF(0, 5, settings['paper_width'], 20))
-        title.setHAlign(Qt.AlignHCenter)
-        layout.addLayoutItem(title)
         
         # Add to project
         project.layoutManager().addLayout(layout)
@@ -390,26 +421,64 @@ class TerrainModelMaker:
         self.dlg.btn_export_contours.setEnabled(True)
         self.dlg.btn_export_laser.setEnabled(True)
         
-        self.dlg.set_status("Layout created. You can now export in various formats.")
+        self.dlg.set_status(f"Layout created with scale 1:{target_scale}. You can now export in various formats.")
         
     def refresh_layout(self):
-        """Refresh the existing layout with current layers"""
+        """Refresh the existing layout with current layers and update extent"""
         if not self.layout:
             self.dlg.set_status("No layout created yet. Please render a layout first.")
             return
-            
-        # Find the map item
-        map_items = [item for item in self.layout.items() if isinstance(item, QgsLayoutItemMap)]
-        if not map_items:
-            self.dlg.set_status("Error: No map found in layout.")
+        
+        # Get current settings
+        settings = self.dlg.get_settings()
+        if not settings:
+            self.dlg.set_status("Invalid settings. Please check your inputs.")
             return
             
-        # Refresh the map
-        for map_item in map_items:
-            map_item.refresh()
+        try:    
+            # Find the map item
+            map_items = [item for item in self.layout.items() if isinstance(item, QgsLayoutItemMap)]
+            if not map_items:
+                self.dlg.set_status("Error: No map found in layout.")
+                return
             
-        self.dlg.set_status("Layout refreshed with current layers.")
-        
+            # Update the page size
+            page_size = QgsLayoutSize(
+                settings['paper_width'],
+                settings['paper_height'],
+                QgsUnitTypes.LayoutMillimeters
+            )
+            self.layout.pageCollection().pages()[0].setPageSize(page_size)
+                
+            # Get the target scale from settings
+            target_scale = settings['scale']
+            
+            # Update the map items - resize and set extent
+            for map_item in map_items:
+                # Resize map to fill the entire page
+                map_item.attemptSetSceneRect(QRectF(0, 0, settings['paper_width'], settings['paper_height']))
+                
+                # First set the extent if we have a rectangle
+                if self.rectangle:
+                    map_item.setExtent(self.rectangle)
+                
+                # Then explicitly set the scale - this may adjust the extent, but will ensure correct scale
+                map_item.setScale(target_scale)
+                    
+                # Refresh the map content
+                map_item.refresh()
+                
+            self.dlg.set_status(f"Layout refreshed with scale 1:{target_scale} and current rectangle dimensions.")
+        except Exception as e:
+            # Log the error and inform the user
+            QgsMessageLog.logMessage(f"Error refreshing layout: {str(e)}", level=Qgis.Critical)
+            self.dlg.set_status(f"Error refreshing layout: {str(e)}")
+            
+            # If the layout was closed, inform the user
+            if str(e).lower().find("null") >= 0 or str(e).lower().find("none") >= 0:
+                self.dlg.set_status("Layout window was closed. Please render a new layout.")
+                self.layout = None
+            
     def export_pdf(self):
         """Export the layout as PDF"""
         if not self.layout:
@@ -550,7 +619,7 @@ class FixedSizeRectangleTool(QgsMapToolEmitPoint):
         
         # Set the rectangle in the plugin
         if self.rectangle:
-            self.plugin.set_rectangle(self.rectangle)
+            self.plugin.set_rectangle(self.rectangle, self.center_point)
         
     def create_rectangle_at_point(self, point):
         """Create a rectangle centered at the given point"""
@@ -588,6 +657,9 @@ class FixedSizeRectangleTool(QgsMapToolEmitPoint):
             point.x() + half_width,
             point.y() + half_height
         )
+        
+        # Save the center point
+        self.center_point = point
         
         # Update the rubber band
         self.update_rubber_band()
