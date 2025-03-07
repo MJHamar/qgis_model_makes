@@ -48,7 +48,8 @@ else:
         print(f"  - {layer.name()} ({layer.type()}) - {layer_id}")
 
 def filter_contours_from_project(project, output_path: str, interval: int):
-    """Filter contour lines to keep every nth meter using a layer from the project."""
+    """Filter contour lines to keep every nth meter using a layer from the project.
+    Returns the created layer without adding it to the original project."""
     # Find the contour layer in the project - be more specific to get the original layer
     contour_layer = None
     
@@ -111,7 +112,7 @@ def filter_contours_from_project(project, output_path: str, interval: int):
     
     if matching_count == 0:
         print("Warning: No features match the filter criteria. Check your interval value.")
-        return
+        return None
         
     # Determine the file format based on file extension
     file_ext = os.path.splitext(output_path)[1].lower()
@@ -154,80 +155,114 @@ def filter_contours_from_project(project, output_path: str, interval: int):
         driver_name
     )
     
-    if error == QgsVectorFileWriter.NoError:
+    # More detailed error handling
+    if isinstance(error, tuple) and len(error) >= 1 and error[0] == QgsVectorFileWriter.NoError:
         print(f"Successfully saved filtered contours to {output_path}")
         
-        # Add the layer to the project
-        print(f"Adding layer to project: {output_path}")
+        # Create a new vector layer from the saved file
         new_layer = QgsVectorLayer(output_path, f"Contours {interval}m", "ogr")
         
         if not new_layer.isValid():
             print(f"Error: Failed to load layer from {output_path}")
-            return
+            return None
         
         # Copy style from original contour layer if available
-        if contour_layer.styleManager().hasStyleName("default"):
-            style_xml = contour_layer.styleManager().style("default")
-            new_layer.importNamedStyle(style_xml)
-            print("Applied style from original contour layer")
+        try:
+            # Check if we can access the style manager
+            style_manager = contour_layer.styleManager()
+            
+            # Try different approaches to copy the style
+            if hasattr(contour_layer, 'renderer'):
+                renderer = contour_layer.renderer().clone()
+                new_layer.setRenderer(renderer)
+                print("Applied style from original contour layer using renderer clone")
+            # Try to copy labeling settings if available
+            if hasattr(contour_layer, 'labeling') and contour_layer.labeling() is not None:
+                new_layer.setLabeling(contour_layer.labeling().clone())
+                print("Applied labeling from original contour layer")
+            else:
+                print("No compatible style method found - using default style")
+        except Exception as e:
+            print(f"Warning: Could not copy style: {e}")
         
-        # Add to project
-        project.addMapLayer(new_layer)
-        
-        # Create a group for contour layers if it doesn't exist
-        root = project.layerTreeRoot()
-        filtered_contours_group = None
-        
-        for child in root.children():
-            if child.name() == "Filtered Contours":
-                filtered_contours_group = child
-                break
-        
-        if not filtered_contours_group:
-            filtered_contours_group = root.addGroup("Filtered Contours")
-        
-        # Move layer to the group
-        layer_node = root.findLayer(new_layer.id())
-        if layer_node:
-            clone = layer_node.clone()
-            filtered_contours_group.addChildNode(clone)
-            root.removeChildNode(layer_node)
-            print(f"Added layer to 'Filtered Contours' group")
-        
-        # Save the project
-        project.write()
-        print("Project saved with new layer")
-        
+        print(f"Created layer: {new_layer.name()}")
         return new_layer
     else:
         print(f"Error saving filtered contours: {error}")
         return None
 
+def organize_layers_in_project(project, layers):
+    """Organize the contour layers in a group in the project"""
+    if not layers:
+        print("No layers to organize")
+        return
+    
+    # Create a group for contour layers
+    root = project.layerTreeRoot()
+    filtered_contours_group = None
+    
+    for child in root.children():
+        if child.name() == "Filtered Contours":
+            filtered_contours_group = child
+            break
+    
+    if not filtered_contours_group:
+        filtered_contours_group = root.addGroup("Filtered Contours")
+    
+    # Move layers to the group
+    for layer in layers:
+        layer_node = root.findLayer(layer.id())
+        if layer_node:
+            clone = layer_node.clone()
+            filtered_contours_group.addChildNode(clone)
+            root.removeChildNode(layer_node)
+            print(f"Added layer {layer.name()} to 'Filtered Contours' group")
+    
+    print("Layers organized in 'Filtered Contours' group")
 
 # Usage:
 try:
+    # Create output directory for contour layers
+    output_dir = 'output_contours'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Created output directory: {output_dir}")
+    
+    # Create a copy of the original project to avoid modifying it
+    new_project = QgsProject()
+    new_project.read(project_path)
+    print("Created a new project instance from the original project")
+    
     # Create contour files for 1m through 10m intervals
     added_layers = []
-    for interval in range(1, 11):
-        output_path = f'contour_lines_{interval}m.gpkg'
+    for interval in range(12, 13):
+        output_path = os.path.join(output_dir, f'contour_lines_{interval}m.gpkg')
         print(f"\n===== Processing {interval}m interval contours =====")
         new_layer = filter_contours_from_project(
-            project=project,
+            project=project,  # Read from original project
             output_path=output_path,
             interval=interval
         )
         if new_layer:
+            # Add new layer to the new project instance
+            new_project.addMapLayer(new_layer)
             added_layers.append(new_layer)
     
     print("\nAll filter operations completed successfully")
-    print(f"Added {len(added_layers)} layers to the project")
+    print(f"Added {len(added_layers)} layers to the new project")
     
-    # Save a new version of the project
-    new_project_path = 'data/dem_custom/data_with_filtered_contours.qgs'
-    if project.write(new_project_path):
-        print(f"Project saved as {new_project_path}")
+    # Organize layers in the new project
+    organize_layers_in_project(new_project, added_layers)
+    
+    # Save the new project with a different name
+    new_project_path = 'data/dem_custom/filtered_contours_project.qgs'
+    if new_project.write(new_project_path):
+        print(f"New project saved as {new_project_path}")
     else:
-        print("Failed to save project")
+        print("Failed to save new project")
+    
+    # The original project remains unchanged
+    print("Original project remains unchanged")
 except Exception as e:
     print(f"Error during filtering: {e}")
     import traceback
