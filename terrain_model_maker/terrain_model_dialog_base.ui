@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>480</width>
-    <height>650</height>
+    <width>400</width>
+    <height>550</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -15,35 +15,139 @@
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
-    <widget class="QGroupBox" name="region_group">
+    <widget class="QGroupBox" name="page_settings_group">
      <property name="title">
-      <string>1. Region Selection</string>
+      <string>Page Settings</string>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_2">
       <item>
+       <layout class="QFormLayout" name="formLayout">
+        <item row="0" column="0">
+         <widget class="QLabel" name="label_paper_size">
+          <property name="text">
+           <string>Paper Size:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <widget class="QComboBox" name="cmb_paper_size"/>
+        </item>
+        <item row="1" column="0">
+         <widget class="QLabel" name="label_orientation">
+          <property name="text">
+           <string>Orientation:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="1">
+         <layout class="QHBoxLayout" name="horizontalLayout_3">
+          <item>
+           <widget class="QRadioButton" name="radio_portrait">
+            <property name="text">
+             <string>Portrait</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QRadioButton" name="radio_landscape">
+            <property name="text">
+             <string>Landscape</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item row="2" column="0">
+         <widget class="QLabel" name="label_width">
+          <property name="text">
+           <string>Width (mm):</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="1">
+         <widget class="QLineEdit" name="txt_width"/>
+        </item>
+        <item row="3" column="0">
+         <widget class="QLabel" name="label_height">
+          <property name="text">
+           <string>Height (mm):</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="1">
+         <widget class="QLineEdit" name="txt_height"/>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="scale_settings_group">
+     <property name="title">
+      <string>Scale Settings</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_3">
+      <item>
+       <layout class="QFormLayout" name="formLayout_2">
+        <item row="0" column="0">
+         <widget class="QLabel" name="label_scale">
+          <property name="text">
+           <string>Scale (1:x):</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <widget class="QLineEdit" name="txt_scale"/>
+        </item>
+        <item row="1" column="0">
+         <widget class="QLabel" name="label_thickness">
+          <property name="text">
+           <string>Sheet Thickness (mm):</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="1">
+         <widget class="QLineEdit" name="txt_thickness"/>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="region_group">
+     <property name="title">
+      <string>Map Region</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_4">
+      <item>
        <layout class="QHBoxLayout" name="horizontalLayout">
         <item>
-         <widget class="QPushButton" name="btn_select_region">
+         <widget class="QPushButton" name="btn_place_rectangle">
           <property name="text">
-           <string>Select Region</string>
+           <string>Place Rectangle</string>
           </property>
          </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="btn_clear_selection">
+         <widget class="QPushButton" name="btn_clear_rectangle">
           <property name="text">
-           <string>Clear Selection</string>
+           <string>Clear Rectangle</string>
           </property>
          </widget>
         </item>
        </layout>
       </item>
       <item>
-       <layout class="QFormLayout" name="formLayout">
+       <layout class="QFormLayout" name="formLayout_3">
         <item row="0" column="0">
-         <widget class="QLabel" name="label">
+         <widget class="QLabel" name="label_region_width">
           <property name="text">
-           <string>Width:</string>
+           <string>Region Width:</string>
           </property>
          </widget>
         </item>
@@ -55,9 +159,9 @@
          </widget>
         </item>
         <item row="1" column="0">
-         <widget class="QLabel" name="label_2">
+         <widget class="QLabel" name="label_region_height">
           <property name="text">
-           <string>Height:</string>
+           <string>Region Height:</string>
           </property>
          </widget>
         </item>
@@ -68,192 +172,30 @@
           </property>
          </widget>
         </item>
-        <item row="2" column="0">
-         <widget class="QLabel" name="label_3">
-          <property name="text">
-           <string>Area:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="2" column="1">
-         <widget class="QLabel" name="lbl_region_area">
-          <property name="text">
-           <string>-</string>
-          </property>
-         </widget>
-        </item>
        </layout>
       </item>
      </layout>
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="paper_group">
+    <widget class="QGroupBox" name="layout_group">
      <property name="title">
-      <string>2. Paper Dimensions</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_3">
-      <item>
-       <layout class="QFormLayout" name="formLayout_2">
-        <item row="0" column="0">
-         <widget class="QLabel" name="label_4">
-          <property name="text">
-           <string>Paper Size:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="1">
-         <widget class="QComboBox" name="cmb_paper_size"/>
-        </item>
-        <item row="1" column="0">
-         <widget class="QLabel" name="label_5">
-          <property name="text">
-           <string>Width (mm):</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="1">
-         <widget class="QLineEdit" name="txt_paper_width"/>
-        </item>
-        <item row="2" column="0">
-         <widget class="QLabel" name="label_6">
-          <property name="text">
-           <string>Height (mm):</string>
-          </property>
-         </widget>
-        </item>
-        <item row="2" column="1">
-         <widget class="QLineEdit" name="txt_paper_height"/>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_2">
-        <item>
-         <spacer name="horizontalSpacer">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QPushButton" name="btn_calculate_scale">
-          <property name="text">
-           <string>Calculate Scale</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="scale_group">
-     <property name="title">
-      <string>3. Scale</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_4">
-      <item>
-       <layout class="QFormLayout" name="formLayout_3">
-        <item row="0" column="0">
-         <widget class="QLabel" name="label_7">
-          <property name="text">
-           <string>Scale (1:x):</string>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="1">
-         <widget class="QLineEdit" name="txt_scale"/>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_3">
-        <item>
-         <spacer name="horizontalSpacer_2">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QPushButton" name="btn_preview">
-          <property name="text">
-           <string>Preview Layout</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="contour_group">
-     <property name="title">
-      <string>4. Material Thickness &amp; Contour Filtering</string>
+      <string>Layout</string>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_5">
       <item>
-       <layout class="QFormLayout" name="formLayout_4">
-        <item row="0" column="0">
-         <widget class="QLabel" name="label_8">
-          <property name="text">
-           <string>Sheet Thickness (mm):</string>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="1">
-         <widget class="QLineEdit" name="txt_thickness"/>
-        </item>
-        <item row="1" column="0">
-         <widget class="QLabel" name="label_9">
-          <property name="text">
-           <string>Required Contour Step:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="1">
-         <widget class="QLabel" name="lbl_contour_step">
-          <property name="text">
-           <string>-</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_4">
+       <layout class="QHBoxLayout" name="horizontalLayout_2">
         <item>
-         <spacer name="horizontalSpacer_3">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
+         <widget class="QPushButton" name="btn_render">
+          <property name="text">
+           <string>Render Layout</string>
           </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
+         </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="btn_filter_contours">
+         <widget class="QPushButton" name="btn_refresh">
           <property name="text">
-           <string>Filter Contours</string>
+           <string>Refresh Layout</string>
           </property>
          </widget>
         </item>
@@ -265,83 +207,36 @@
    <item>
     <widget class="QGroupBox" name="export_group">
      <property name="title">
-      <string>5. Export</string>
+      <string>Export</string>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_6">
       <item>
-       <layout class="QFormLayout" name="formLayout_5">
-        <item row="0" column="0">
-         <widget class="QLabel" name="label_10">
-          <property name="text">
-           <string>Output Directory:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="1">
-         <layout class="QHBoxLayout" name="horizontalLayout_5">
-          <item>
-           <widget class="QLineEdit" name="txt_output_dir"/>
-          </item>
-          <item>
-           <widget class="QPushButton" name="btn_browse_output">
-            <property name="text">
-             <string>Browse...</string>
-            </property>
-           </widget>
-          </item>
-         </layout>
-        </item>
-        <item row="1" column="0">
-         <widget class="QLabel" name="label_11">
-          <property name="text">
-           <string>Output Format:</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="1">
-         <widget class="QComboBox" name="cmb_output_format">
-          <item>
-           <property name="text">
-            <string>CSV</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>DXF</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>SVG</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-       </layout>
+       <widget class="QPushButton" name="btn_export_pdf">
+        <property name="text">
+         <string>Save as PDF</string>
+        </property>
+       </widget>
       </item>
       <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_6">
-        <item>
-         <spacer name="horizontalSpacer_4">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QPushButton" name="btn_export">
-          <property name="text">
-           <string>Export for Laser Cutting</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
+       <widget class="QPushButton" name="btn_export_csv">
+        <property name="text">
+         <string>Save as CSV</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btn_export_contours">
+        <property name="text">
+         <string>Save Contours as CSV</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btn_export_laser">
+        <property name="text">
+         <string>Render Laser-Cut Layout</string>
+        </property>
+       </widget>
       </item>
      </layout>
     </widget>
@@ -362,7 +257,7 @@
       <enum>Qt::Horizontal</enum>
      </property>
      <property name="standardButtons">
-      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Help|QDialogButtonBox::Ok</set>
+      <set>QDialogButtonBox::Close|QDialogButtonBox::Help</set>
      </property>
     </widget>
    </item>
