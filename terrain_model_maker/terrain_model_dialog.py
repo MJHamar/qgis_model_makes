@@ -24,7 +24,9 @@
 import os
 from qgis.PyQt import QtGui, QtWidgets, uic
 from qgis.PyQt.QtCore import Qt, pyqtSignal
+from qgis.PyQt.QtGui import QColor
 from qgis.gui import QgsMapCanvas
+from qgis.core import QgsMapLayerProxyModel, QgsVectorLayer, QgsWkbTypes
 
 from .utils import PAPER_SIZES
 
@@ -49,6 +51,12 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
     paperSizeChanged = pyqtSignal()
     scaleChanged = pyqtSignal()
     
+    # Contour-related signals
+    contourLayerChanged = pyqtSignal(QgsVectorLayer)
+    contourElevFieldChanged = pyqtSignal(str)
+    contourColorChanged = pyqtSignal(QColor)
+    contourThicknessChanged = pyqtSignal(float)
+    
     def __init__(self, iface, parent=None):
         """Constructor."""
         super(TerrainModelDialog, self).__init__(parent)
@@ -69,6 +77,7 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Initialize state
         self.has_rectangle = False
+        self.contour_color = QColor(255, 0, 0)  # Default red
         self.update_ui_state()
         
     def init_ui(self):
@@ -84,6 +93,9 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Hide the refresh button as it's no longer needed
         self.btn_refresh.setVisible(False)
+        
+        # Set up the contour color button
+        self.update_color_button()
         
     def setup_connections(self):
         """Set up signal/slot connections"""
@@ -106,6 +118,15 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         self.txt_height.textChanged.connect(self.on_settings_changed)
         self.txt_scale.textChanged.connect(self.on_settings_changed)
         
+        # Contour connections
+        self.cmb_contour_layer.currentIndexChanged.connect(self.on_contour_layer_changed)
+        self.cmb_elevation_field.currentIndexChanged.connect(self.on_elev_field_changed)
+        self.btn_contour_color.clicked.connect(self.on_contour_color_clicked)
+        self.txt_thickness.textChanged.connect(self.on_thickness_changed)
+        
+        # Manually trigger the thickness changed signal to initialize filtering
+        self.on_thickness_changed(self.txt_thickness.text())
+    
     def setup_paper_sizes(self):
         """Set up standard paper sizes in the combo box"""
         # Clear existing items
@@ -246,6 +267,172 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         """Handle export laser-cut layout button click"""
         self.exportLaserRequested.emit()
     
+    def on_contour_layer_changed(self, index):
+        """Handle contour layer selection change"""
+        if index < 0:
+            return
+            
+        # Get the selected layer
+        layer_data = self.cmb_contour_layer.itemData(index)
+        if not layer_data:
+            return
+            
+        layer = layer_data[0]  # Unpack the layer from the data tuple
+        
+        # Update the elevation field dropdown
+        self.populate_elevation_fields(layer)
+        
+        # Emit signal with the selected layer
+        self.contourLayerChanged.emit(layer)
+        
+        self.lbl_status.setText(f"Contour layer changed to: {layer.name()}")
+    
+    def on_elev_field_changed(self, index):
+        """Handle elevation field selection change"""
+        if index < 0:
+            return
+            
+        field_name = self.cmb_elevation_field.itemText(index)
+        if not field_name:
+            return
+            
+        # Emit signal with the selected field
+        self.contourElevFieldChanged.emit(field_name)
+        
+        self.lbl_status.setText(f"Elevation field changed to: {field_name}")
+    
+    def on_contour_color_clicked(self):
+        """Handle contour color button click"""
+        color = QtWidgets.QColorDialog.getColor(self.contour_color, self, "Select Contour Color")
+        if color.isValid():
+            self.contour_color = color
+            self.update_color_button()
+            self.contourColorChanged.emit(color)
+            self.lbl_status.setText(f"Contour color changed.")
+    
+    def on_thickness_changed(self, thickness_text):
+        """Handle sheet thickness value change"""
+        try:
+            thickness = float(thickness_text)
+            if thickness > 0:
+                self.contourThicknessChanged.emit(thickness)
+        except (ValueError, TypeError):
+            pass  # Invalid input, ignore
+    
+    def update_color_button(self):
+        """Update the contour color button appearance"""
+        if not hasattr(self, 'contour_color'):
+            self.contour_color = QColor(255, 0, 0)  # Default red
+            
+        # Set background color of button
+        self.btn_contour_color.setStyleSheet(
+            f"background-color: {self.contour_color.name()}; color: {'black' if self.contour_color.lightness() > 128 else 'white'};"
+        )
+        
+        # Update button text to show color
+        self.btn_contour_color.setText(self.contour_color.name())
+    
+    def populate_contour_layers(self, contour_layers):
+        """Populate the contour layer dropdown with detected layers.
+        
+        :param contour_layers: List of (layer, granularity_score, elevation_field) tuples
+        """
+        self.cmb_contour_layer.clear()
+        
+        if not contour_layers:
+            self.cmb_contour_layer.addItem("No contour layers found", None)
+            self.cmb_contour_layer.setEnabled(False)
+            self.cmb_elevation_field.setEnabled(False)
+            return
+            
+        # Add each layer to the dropdown
+        for i, (layer, score, elev_field) in enumerate(contour_layers):
+            # Store layer and other info as item data
+            self.cmb_contour_layer.addItem(f"{layer.name()} ({layer.featureCount()} features)", 
+                                          (layer, score, elev_field))
+        
+        # Enable the dropdowns
+        self.cmb_contour_layer.setEnabled(True)
+        self.cmb_elevation_field.setEnabled(True)
+        
+        # Select the first layer (highest granularity)
+        if contour_layers:
+            self.cmb_contour_layer.setCurrentIndex(0)
+            
+            # Also populate elevation fields for the selected layer
+            self.populate_elevation_fields(contour_layers[0][0])
+    
+    def populate_elevation_fields(self, layer):
+        """Populate the elevation field dropdown for the selected layer.
+        
+        :param layer: QgsVectorLayer to get fields from
+        """
+        self.cmb_elevation_field.clear()
+        
+        if not layer:
+            self.cmb_elevation_field.setEnabled(False)
+            return
+            
+        # Get all fields from the layer
+        fields = layer.fields()
+        
+        # Filter for numeric fields
+        numeric_fields = []
+        for field in fields:
+            if field.isNumeric():
+                numeric_fields.append(field.name())
+        
+        # Add fields to the dropdown
+        for field_name in numeric_fields:
+            self.cmb_elevation_field.addItem(field_name)
+        
+        # If no numeric fields found
+        if not numeric_fields:
+            self.cmb_elevation_field.addItem("No numeric fields found")
+            self.cmb_elevation_field.setEnabled(False)
+            return
+        
+        # Enable the field selection
+        self.cmb_elevation_field.setEnabled(True)
+        
+        # Try to select the detected elevation field
+        selected_layer_idx = self.cmb_contour_layer.currentIndex()
+        if selected_layer_idx >= 0:
+            layer_data = self.cmb_contour_layer.itemData(selected_layer_idx)
+            if layer_data and layer_data[2]:  # Check if elevation field is available
+                elev_field = layer_data[2]
+                # Find and select the detected elevation field
+                for i in range(self.cmb_elevation_field.count()):
+                    if self.cmb_elevation_field.itemText(i) == elev_field:
+                        self.cmb_elevation_field.setCurrentIndex(i)
+                        break
+    
+    def get_selected_contour_layer(self):
+        """Get the currently selected contour layer.
+        
+        :return: Selected contour layer or None
+        """
+        index = self.cmb_contour_layer.currentIndex()
+        if index < 0:
+            return None
+            
+        layer_data = self.cmb_contour_layer.itemData(index)
+        if not layer_data:
+            return None
+            
+        return layer_data[0]  # Return the layer
+    
+    def get_selected_elevation_field(self):
+        """Get the currently selected elevation field.
+        
+        :return: Selected elevation field name or None
+        """
+        index = self.cmb_elevation_field.currentIndex()
+        if index < 0:
+            return None
+            
+        return self.cmb_elevation_field.itemText(index)
+    
     def set_rectangle_info(self, width, height):
         """Update the rectangle information labels"""
         # Round to 2 decimal places for display
@@ -265,7 +452,8 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
                 "paper_height": float(self.txt_height.text()),
                 "scale": int(self.txt_scale.text()),
                 "thickness": float(self.txt_thickness.text()),
-                "orientation": "portrait" if self.radio_portrait.isChecked() else "landscape"
+                "orientation": "portrait" if self.radio_portrait.isChecked() else "landscape",
+                "contour_color": self.contour_color
             }
             return settings
         except (ValueError, TypeError):

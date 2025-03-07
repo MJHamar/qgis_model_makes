@@ -58,6 +58,7 @@ except ImportError:
 # Import the dialog
 from .terrain_model_dialog import TerrainModelDialog
 from .utils import calculate_rectangle_dimensions, calculate_scale, calculate_contour_step
+from .contour_manager import ContourManager
 
 
 class TerrainModelMaker:
@@ -106,6 +107,9 @@ class TerrainModelMaker:
         self.layout_monitor_timer = None
         self.previous_extent = None
         self.sync_in_progress = False
+        
+        # Initialize contour manager
+        self.contour_manager = None
         
         # Save state
         self.last_directory = None
@@ -232,12 +236,27 @@ class TerrainModelMaker:
         if self.layout_monitor_timer:
             self.layout_monitor_timer.stop()
             self.layout_monitor_timer = None
+            
+        # Clean up contour manager
+        if self.contour_manager:
+            self.contour_manager.clean_up()
+            self.contour_manager = None
 
     def run(self):
         """Run method that performs all the real work"""
 
         # Create the dialog and keep reference
         self.dlg = TerrainModelDialog(self.iface)
+        
+        # Initialize contour manager
+        if not self.contour_manager:
+            self.contour_manager = ContourManager(self.iface)
+            
+        # Detect contour layers
+        self.contour_manager.detect_contour_layers()
+        
+        # Populate the contour layers in the dialog
+        self.dlg.populate_contour_layers(self.contour_manager.get_contour_layers())
         
         # Connect signals
         self.connect_signals()
@@ -250,6 +269,14 @@ class TerrainModelMaker:
 
         # Connect dialog close event to stop monitoring
         self.dlg.finished.connect(self.on_dialog_closed)
+        
+        # Process initial thickness value to filter contours
+        try:
+            thickness = float(self.dlg.txt_thickness.text())
+            self.update_filtered_contours(thickness)
+        except (ValueError, TypeError):
+            # Invalid thickness, use default
+            self.update_filtered_contours(3.0)
         
         # Show the dialog
         self.dlg.show()
@@ -264,9 +291,15 @@ class TerrainModelMaker:
         self.dlg.exportContoursRequested.connect(self.export_contours)
         self.dlg.exportLaserRequested.connect(self.export_laser_cut)
         
-        # Connect to new settings change signals
+        # Connect to settings change signals
         self.dlg.paperSizeChanged.connect(self.on_settings_changed)
         self.dlg.scaleChanged.connect(self.on_settings_changed)
+        
+        # Connect contour-related signals
+        self.dlg.contourLayerChanged.connect(self.on_contour_layer_changed)
+        self.dlg.contourElevFieldChanged.connect(self.on_contour_elev_field_changed)
+        self.dlg.contourColorChanged.connect(self.on_contour_color_changed)
+        self.dlg.contourThicknessChanged.connect(self.on_contour_thickness_changed)
     
     def on_settings_changed(self):
         """Handle changes in paper size or scale"""
@@ -690,6 +723,195 @@ class TerrainModelMaker:
         if self.layout_monitor_timer:
             self.layout_monitor_timer.stop()
             self.layout_monitor_timer = None
+
+    def on_contour_layer_changed(self, layer):
+        """Handle change of contour layer selection.
+        
+        :param layer: The newly selected contour layer
+        """
+        if not layer or not self.contour_manager:
+            return
+            
+        # Get the current thickness value
+        thickness = 3.0  # Default
+        try:
+            thickness = float(self.dlg.txt_thickness.text())
+        except (ValueError, TypeError):
+            pass
+            
+        # Get the selected elevation field
+        elev_field = self.dlg.get_selected_elevation_field()
+        
+        # Filter contours with the new layer
+        self.update_filtered_contours(thickness, layer, elev_field)
+        
+    def on_contour_elev_field_changed(self, field_name):
+        """Handle change of elevation field selection.
+        
+        :param field_name: The newly selected elevation field name
+        """
+        if not field_name or not self.contour_manager:
+            return
+            
+        # Get the current thickness value
+        thickness = 3.0  # Default
+        try:
+            thickness = float(self.dlg.txt_thickness.text())
+        except (ValueError, TypeError):
+            pass
+            
+        # Get the selected contour layer
+        layer = self.dlg.get_selected_contour_layer()
+        
+        # Filter contours with the new elevation field
+        self.update_filtered_contours(thickness, layer, field_name)
+        
+    def on_contour_color_changed(self, color):
+        """Handle change of contour color.
+        
+        :param color: The newly selected color
+        """
+        if not self.contour_manager or not self.contour_manager.filtered_layer:
+            return
+            
+        # Update the color of the filtered contour layer
+        self.contour_manager.set_contour_color(color)
+        
+        # Update the layout if it exists
+        if self.layout:
+            self.update_layout_from_rectangle()
+            
+    def on_contour_thickness_changed(self, thickness):
+        """Handle change of sheet thickness value.
+        
+        :param thickness: The new thickness value in mm
+        """
+        self.dlg.set_status(f"Processing thickness change: {thickness}mm")
+        
+        if not self.contour_manager:
+            self.dlg.set_status("No contour manager available.")
+            return
+            
+        try:
+            # Convert thickness to float
+            thickness_float = float(thickness)
+            
+            # Get the selected contour layer and elevation field
+            layer = self.dlg.get_selected_contour_layer()
+            elev_field = self.dlg.get_selected_elevation_field()
+            
+            # Add debug info
+            if layer:
+                self.dlg.set_status(f"Filtering with layer: {layer.name()}, field: {elev_field}, thickness: {thickness_float}mm")
+            else:
+                self.dlg.set_status("No contour layer selected.")
+                return
+                
+            # Filter contours with the new thickness
+            self.update_filtered_contours(thickness_float, layer, elev_field)
+        except (ValueError, TypeError) as e:
+            self.dlg.set_status(f"Error processing thickness: {str(e)}")
+        
+    def update_filtered_contours(self, thickness, layer=None, elevation_field=None):
+        """Update the filtered contours based on the given parameters.
+        
+        :param thickness: Thickness value in mm
+        :param layer: Contour layer (if None, use the selected layer from dialog)
+        :param elevation_field: Elevation field name (if None, auto-detect)
+        """
+        self.dlg.set_status(f"Updating filtered contours: thickness={thickness}mm")
+        
+        if not self.contour_manager:
+            self.dlg.set_status("No contour manager available.")
+            return
+            
+        # If layer not provided, get from dialog
+        if not layer:
+            layer = self.dlg.get_selected_contour_layer()
+            
+        # If still no layer, return
+        if not layer:
+            self.dlg.set_status("No contour layer selected.")
+            return
+            
+        self.dlg.set_status(f"Filtering contours from {layer.name()} with thickness {thickness}mm...")
+            
+        # Filter contours
+        try:
+            filtered_layer = self.contour_manager.filter_contours(layer, thickness, elevation_field)
+            
+            if filtered_layer:
+                # Set the filtered layer's color
+                self.contour_manager.set_contour_color(self.dlg.contour_color)
+                
+                # Hide all other contour layers
+                self.hide_other_contour_layers()
+                
+                # Show filtered layer
+                filtered_layer.setOpacity(0.8)  # Semi-transparent
+                
+                # Update status
+                feature_count = filtered_layer.featureCount()
+                self.dlg.set_status(f"Filtered contours updated. Selected {feature_count} contours with thickness {thickness}mm.")
+                
+                # Update the layout if it exists
+                if self.layout:
+                    self.update_layout_from_rectangle()
+            else:
+                self.dlg.set_status(f"Failed to filter contours (no layer returned). Check layer and elevation field.")
+        except Exception as e:
+            self.dlg.set_status(f"Error filtering contours: {str(e)}")
+            import traceback
+            QgsMessageLog.logMessage(f"Filtering error: {traceback.format_exc()}", level=Qgis.Critical)
+            
+    def hide_other_contour_layers(self):
+        """Hide all contour layers except the filtered one"""
+        if not self.contour_manager:
+            return
+            
+        # Get all detected contour layers
+        for layer, _, _ in self.contour_manager.get_contour_layers():
+            if layer and layer.id() != getattr(self.contour_manager.filtered_layer, 'id', lambda: None)():
+                # Hide this layer
+                layer_node = QgsProject.instance().layerTreeRoot().findLayer(layer.id())
+                if layer_node:
+                    layer_node.setItemVisibilityChecked(False)
+                    self.dlg.set_status(f"Hidden original contour layer: {layer.name()}")
+                
+        # Make sure filtered layer is visible
+        if self.contour_manager.filtered_layer:
+            filtered_id = self.contour_manager.filtered_layer.id()
+            filtered_layer = self.contour_manager.filtered_layer
+            
+            # Ensure it's in the layer tree
+            if QgsProject.instance().mapLayer(filtered_id) is None:
+                # If not in project, add it
+                QgsProject.instance().addMapLayer(filtered_layer)
+                self.dlg.set_status(f"Added filtered layer to project: {filtered_layer.name()}")
+                
+            # Make sure it's visible
+            layer_node = QgsProject.instance().layerTreeRoot().findLayer(filtered_id)
+            if layer_node:
+                layer_node.setItemVisibilityChecked(True)
+                self.dlg.set_status(f"Set filtered layer visible: {filtered_layer.name()}")
+            else:
+                self.dlg.set_status(f"Could not find filtered layer in layer tree: {filtered_layer.name()}")
+                
+            # Move to top for visibility
+            try:
+                root = QgsProject.instance().layerTreeRoot()
+                filtered_node = root.findLayer(filtered_id)
+                if filtered_node:
+                    clone = filtered_node.clone()
+                    parent = filtered_node.parent()
+                    parent.insertChildNode(0, clone)
+                    parent.removeChildNode(filtered_node)
+                    self.dlg.set_status(f"Moved filtered layer to top: {filtered_layer.name()}")
+            except Exception as e:
+                self.dlg.set_status(f"Error moving filtered layer: {str(e)}")
+                
+        else:
+            self.dlg.set_status("No filtered layer available to show.")
 
 
 class FixedSizeRectangleTool(QgsMapToolEmitPoint):
