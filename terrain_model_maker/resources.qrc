@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/plugins/terrain_model_maker">
+    <file>resources/icon.svg</file>
+  </qresource>
+</RCC> 

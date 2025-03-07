@@ -1,0 +1,29 @@
+[general]
+name=Terrain Model Maker
+qgisMinimumVersion=3.0
+description=Create laser-cuttable terrain models from contour data
+version=0.1
+author=Miklos Hamar
+email=hamiki987@gmail.com
+
+about=This plugin helps you create laser-cuttable terrain models by:
+      1. Selecting a region on the map
+      2. Specifying paper dimensions
+      3. Filtering contour lines based on scale and material thickness
+      4. Exporting to a format suitable for laser cutting
+
+tracker=https://github.com/yourusername/terrain_model_maker/issues
+repository=https://github.com/yourusername/terrain_model_maker
+homepage=https://github.com/yourusername/terrain_model_maker
+
+# Tags are comma separated with spaces allowed
+tags=contour, terrain, laser cut, paper model, 3d model, dem
+
+category=Plugins
+icon=resources/icon.png
+
+# experimental flag
+experimental=True
+
+# deprecated flag (applies to the whole plugin, not just a single version)
+deprecated=False 
