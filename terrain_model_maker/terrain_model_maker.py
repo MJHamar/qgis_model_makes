@@ -45,7 +45,8 @@ from qgis.core import (
     QgsPrintLayout,
     QgsDistanceArea,
     QgsTextFormat,
-    Qgis
+    Qgis,
+    QgsMessageLog
 )
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsMapToolEmitPoint, QgsMapToolPan
 
@@ -222,7 +223,7 @@ class TerrainModelMaker:
                 self.tr('&Terrain Model Maker'),
                 action)
             self.iface.removeToolBarIcon(action)
-            
+        
         # Clean up resources
         if self.rubber_band:
             self.rubber_band.reset()
@@ -271,16 +272,17 @@ class TerrainModelMaker:
         self.dlg.finished.connect(self.on_dialog_closed)
         
         # Process initial thickness value to filter contours
+        scale = self.dlg.get_settings()['scale']
         try:
             thickness = float(self.dlg.txt_thickness.text())
-            self.update_filtered_contours(thickness)
+            self.update_filtered_contours(thickness, scale)
         except (ValueError, TypeError):
             # Invalid thickness, use default
-            self.update_filtered_contours(3.0)
+            self.update_filtered_contours(3.0, scale)
         
         # Show the dialog
         self.dlg.show()
-
+    
     def connect_signals(self):
         """Connect dialog signals to slots"""
         self.dlg.placeRectangleRequested.connect(self.activate_rectangle_tool)
@@ -293,13 +295,23 @@ class TerrainModelMaker:
         
         # Connect to settings change signals
         self.dlg.paperSizeChanged.connect(self.on_settings_changed)
-        self.dlg.scaleChanged.connect(self.on_settings_changed)
+        self.dlg.scaleChanged.connect(self.on_scale_changed)
         
         # Connect contour-related signals
         self.dlg.contourLayerChanged.connect(self.on_contour_layer_changed)
         self.dlg.contourElevFieldChanged.connect(self.on_contour_elev_field_changed)
         self.dlg.contourColorChanged.connect(self.on_contour_color_changed)
         self.dlg.contourThicknessChanged.connect(self.on_contour_thickness_changed)
+    
+    def on_scale_changed(self):
+        """Handle changes in scale"""
+        self.on_settings_changed()
+        try:
+            thickness = float(self.dlg.txt_thickness.text())
+            scale = self.dlg.get_settings()['scale']
+            self.update_filtered_contours(thickness, scale)
+        except (ValueError, TypeError):
+            QgsMessageLog.logMessage("Error updating filtered contours", "Terrain Model", Qgis.Critical)
     
     def on_settings_changed(self):
         """Handle changes in paper size or scale"""
@@ -311,7 +323,7 @@ class TerrainModelMaker:
             # Also update the layout if it exists
             if self.layout:
                 self.update_layout_from_rectangle()
-    
+
     def update_rectangle_dimensions(self):
         """Update the rectangle dimensions based on current settings"""
         # Get settings from dialog
@@ -499,7 +511,7 @@ class TerrainModelMaker:
         if not self.rectangle:
             self.dlg.set_status("No rectangle selected. Please place a rectangle first.")
             return
-            
+
         # Get settings from dialog
         settings = self.dlg.get_settings()
         if not settings:
@@ -593,7 +605,7 @@ class TerrainModelMaker:
             if not self.previous_extent:
                 self.previous_extent = current_extent
                 return
-                
+            
             # Check if the extent has changed significantly
             x_min_diff = abs(current_extent.xMinimum() - self.previous_extent.xMinimum())
             x_max_diff = abs(current_extent.xMaximum() - self.previous_extent.xMaximum())
@@ -642,7 +654,7 @@ class TerrainModelMaker:
                 # Store the new extent for next comparison
                 self.previous_extent = current_extent
                 self.sync_in_progress = False
-                
+            
         except Exception as e:
             # Log any errors
             QgsMessageLog.logMessage(f"Error checking layout changes: {str(e)}", level=Qgis.Critical)
@@ -696,7 +708,7 @@ class TerrainModelMaker:
         """Export the terrain data as CSV"""
         # This will be implemented in future versions
         self.dlg.set_status("CSV export not yet implemented.")
-        
+    
     def export_contours(self):
         """Export contours as CSV"""
         # This will be implemented in future versions
@@ -718,11 +730,54 @@ class TerrainModelMaker:
         self.last_directory = directory
 
     def on_dialog_closed(self):
-        """Handle dialog being closed"""
-        # Stop layout monitoring when dialog is closed
+        """Handle dialog being closed, ensuring graceful cleanup of all resources"""
+        self.dlg.set_status("Cleaning up resources...")
+        
+        # 1. Stop layout monitoring when dialog is closed
         if self.layout_monitor_timer:
             self.layout_monitor_timer.stop()
             self.layout_monitor_timer = None
+        
+        # 2. Close the layout if it's open
+        if self.layout:
+            try:
+                # Remove the layout from the project
+                layout_name = self.layout.name()
+                layouts = self.project.layoutManager().layouts()
+                for layout in layouts:
+                    if layout.name() == layout_name:
+                        self.project.layoutManager().removeLayout(layout)
+                        break
+            except Exception as e:
+                QgsMessageLog.logMessage(f"Error closing layout: {str(e)}", "Terrain Model", Qgis.Warning)
+            finally:
+                self.layout = None
+                
+        # 3. Remove the rubber band rectangle
+        self.clear_rectangle()
+        
+        # 4. Restore visibility of all contour layers
+        self.restore_contour_layers_visibility()
+        
+        # 5. Clean up contour manager resources (removes filtered layer)
+        if self.contour_manager:
+            self.contour_manager.clean_up()
+            
+        self.dlg.set_status("Cleanup complete.")
+    
+    def restore_contour_layers_visibility(self):
+        """Restore visibility of all contour layers"""
+        if not self.contour_manager:
+            return
+            
+        # Get all detected contour layers and restore their visibility
+        for layer, _, _ in self.contour_manager.get_contour_layers():
+            if layer:
+                # Make the layer visible again
+                layer_node = QgsProject.instance().layerTreeRoot().findLayer(layer.id())
+                if layer_node:
+                    layer_node.setItemVisibilityChecked(True)
+                    self.dlg.set_status(f"Restored visibility of contour layer: {layer.name()}")
 
     def on_contour_layer_changed(self, layer):
         """Handle change of contour layer selection.
@@ -743,7 +798,8 @@ class TerrainModelMaker:
         elev_field = self.dlg.get_selected_elevation_field()
         
         # Filter contours with the new layer
-        self.update_filtered_contours(thickness, layer, elev_field)
+        scale = self.dlg.get_settings()['scale']
+        self.update_filtered_contours(thickness, scale, layer, elev_field)
         
     def on_contour_elev_field_changed(self, field_name):
         """Handle change of elevation field selection.
@@ -751,7 +807,7 @@ class TerrainModelMaker:
         :param field_name: The newly selected elevation field name
         """
         if not field_name or not self.contour_manager:
-            return
+                return
             
         # Get the current thickness value
         thickness = 3.0  # Default
@@ -764,7 +820,8 @@ class TerrainModelMaker:
         layer = self.dlg.get_selected_contour_layer()
         
         # Filter contours with the new elevation field
-        self.update_filtered_contours(thickness, layer, field_name)
+        scale = self.dlg.get_settings()['scale']
+        self.update_filtered_contours(thickness, scale, layer, field_name)
         
     def on_contour_color_changed(self, color):
         """Handle change of contour color.
@@ -772,7 +829,7 @@ class TerrainModelMaker:
         :param color: The newly selected color
         """
         if not self.contour_manager or not self.contour_manager.filtered_layer:
-            return
+                return
             
         # Update the color of the filtered contour layer
         self.contour_manager.set_contour_color(color)
@@ -808,14 +865,16 @@ class TerrainModelMaker:
                 return
                 
             # Filter contours with the new thickness
-            self.update_filtered_contours(thickness_float, layer, elev_field)
+            scale = self.dlg.get_settings()['scale']
+            self.update_filtered_contours(thickness_float, scale, layer, elev_field)
         except (ValueError, TypeError) as e:
             self.dlg.set_status(f"Error processing thickness: {str(e)}")
         
-    def update_filtered_contours(self, thickness, layer=None, elevation_field=None):
+    def update_filtered_contours(self, thickness, scale, layer=None, elevation_field=None):
         """Update the filtered contours based on the given parameters.
         
         :param thickness: Thickness value in mm
+        :param scale: Current map scale
         :param layer: Contour layer (if None, use the selected layer from dialog)
         :param elevation_field: Elevation field name (if None, auto-detect)
         """
@@ -824,7 +883,7 @@ class TerrainModelMaker:
         if not self.contour_manager:
             self.dlg.set_status("No contour manager available.")
             return
-            
+                
         # If layer not provided, get from dialog
         if not layer:
             layer = self.dlg.get_selected_contour_layer()
@@ -838,7 +897,7 @@ class TerrainModelMaker:
             
         # Filter contours
         try:
-            filtered_layer = self.contour_manager.filter_contours(layer, thickness, elevation_field)
+            filtered_layer = self.contour_manager.filter_contours(layer, thickness, scale, elevation_field)
             
             if filtered_layer:
                 # Set the filtered layer's color
@@ -861,8 +920,6 @@ class TerrainModelMaker:
                 self.dlg.set_status(f"Failed to filter contours (no layer returned). Check layer and elevation field.")
         except Exception as e:
             self.dlg.set_status(f"Error filtering contours: {str(e)}")
-            import traceback
-            QgsMessageLog.logMessage(f"Filtering error: {traceback.format_exc()}", level=Qgis.Critical)
             
     def hide_other_contour_layers(self):
         """Hide all contour layers except the filtered one"""
@@ -909,7 +966,6 @@ class TerrainModelMaker:
                     self.dlg.set_status(f"Moved filtered layer to top: {filtered_layer.name()}")
             except Exception as e:
                 self.dlg.set_status(f"Error moving filtered layer: {str(e)}")
-                
         else:
             self.dlg.set_status("No filtered layer available to show.")
 
@@ -966,7 +1022,7 @@ class FixedSizeRectangleTool(QgsMapToolEmitPoint):
         """Handle canvas move event"""
         if not self.is_moving:
             return
-            
+        
         # Calculate offset from start drag point
         current_point = self.toMapCoordinates(e.pos())
         dx = current_point.x() - self.start_drag_point.x()

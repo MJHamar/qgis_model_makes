@@ -71,7 +71,7 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Set up paper sizes
         self.setup_paper_sizes()
-        
+    
         # Set up validators for numeric input
         self.setup_validators()
         
@@ -462,4 +462,10 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         
     def set_status(self, message):
         """Update the status label"""
-        self.lbl_status.setText(message) 
+        self.lbl_status.setText(message)
+    
+    def closeEvent(self, event):
+        """Handle the dialog being closed with the X button"""
+        # Emit the finished signal to trigger cleanup in the main plugin
+        self.finished.emit(0)  # 0 = rejected
+        super().closeEvent(event) 

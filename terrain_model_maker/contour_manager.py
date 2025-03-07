@@ -175,15 +175,16 @@ class ContourManager:
             return self.contour_layers[0][0]
         return None
     
-    def filter_contours(self, source_layer, thickness, elevation_field=None):
-        """Filter contours based on sheet thickness.
+    def filter_contours(self, source_layer, thickness, scale, elevation_field=None):
+        """Filter contours based on sheet thickness and scale.
         
         :param source_layer: Source contour layer
         :param thickness: Sheet thickness value
+        :param scale: Current map scale
         :param elevation_field: Field containing elevation data (auto-detected if None)
         :return: The filtered layer
         """
-        QgsMessageLog.logMessage(f"Filtering contours: layer={source_layer.name()}, thickness={thickness}mm", 
+        QgsMessageLog.logMessage(f"Filtering contours: layer={source_layer.name()}, thickness={thickness}mm, scale={scale}", 
                                 "Terrain Model", Qgis.Info)
         
         # Clean up previous filtered layer if it exists
@@ -221,6 +222,27 @@ class ContourManager:
         # Get the elevation range to help with debugging
         min_elev, max_elev = self.get_elevation_range(source_layer, elevation_field)
         QgsMessageLog.logMessage(f"Elevation range: {min_elev} to {max_elev}", "Terrain Model", Qgis.Info)
+        
+        # Calculate contour granularity
+        elevation_values = sorted(set(float(feature[elevation_field]) for feature in source_layer.getFeatures() if feature[elevation_field] is not None))
+        if len(elevation_values) > 1:
+            intervals = [elevation_values[i+1] - elevation_values[i] for i in range(len(elevation_values)-1)]
+            contour_granularity = min(intervals)
+            QgsMessageLog.logMessage(f"Contour granularity: {contour_granularity}", "Terrain Model", Qgis.Info)
+        else:
+            QgsMessageLog.logMessage("Insufficient data to determine contour granularity. Defaulting to 1m", "Terrain Model", Qgis.Warning)
+            contour_granularity = 1
+        # make sure contour_granularity is in milimeters
+        contour_granularity = contour_granularity * 1000
+        
+        # Validate scale
+        if scale is None:
+            QgsMessageLog.logMessage("Scale is None, cannot proceed with filtering", "Terrain Model", Qgis.Critical)
+            return None
+        
+        # Calculate step size
+        step_size = scale * thickness / contour_granularity
+        QgsMessageLog.logMessage(f"Calculated step size: {step_size}", "Terrain Model", Qgis.Info)
         
         # Create a temporary layer with the same CRS and fields as the source
         temp_path = self._get_temp_path('filtered_contours.gpkg')
@@ -274,25 +296,12 @@ class ContourManager:
             QgsMessageLog.logMessage(f"Writer has error: {writer.errorMessage()}", "Terrain Model", Qgis.Critical)
             return None
         
-        # Filter contours where elevation % thickness = 0
+        # Filter contours using step size
         request = QgsFeatureRequest()
         
         features_added = 0
-        elevation_values = []
         try:
             QgsMessageLog.logMessage(f"Beginning filtering with elevation field: {elevation_field}", "Terrain Model", Qgis.Info)
-            
-            # Take a sample of elevation values to help debug
-            sample_size = min(5, source_layer.featureCount())
-            sample_features = list(source_layer.getFeatures(QgsFeatureRequest().setLimit(sample_size)))
-            
-            for feature in sample_features:
-                if elevation_field in feature.fields().names():
-                    elevation_values.append(feature[elevation_field])
-                else:
-                    QgsMessageLog.logMessage(f"Field {elevation_field} not found in feature", "Terrain Model", Qgis.Warning)
-            
-            QgsMessageLog.logMessage(f"Sample elevation values: {elevation_values}", "Terrain Model", Qgis.Info)
             
             # Now filter the contours
             total_features = source_layer.featureCount()
@@ -315,79 +324,18 @@ class ContourManager:
                 except (ValueError, TypeError):
                     continue
                     
-                # Apply filter: elevation % thickness = 0
-                remainder = elev_float % thickness
+                # Apply filter: elevation % step_size = 0
+                remainder = elev_float % step_size
                 threshold = 0.001  # Small threshold for float comparison
                 
-                # Check if this elevation is a multiple of the thickness value
-                if abs(remainder) < threshold or abs(thickness - remainder) < threshold:
+                # Check if this elevation is a multiple of the step size
+                if abs(remainder) < threshold or abs(step_size - remainder) < threshold:
                     writer.addFeature(feature)
                     features_added += 1
                     if features_added <= 5:  # Print the first few matches for debugging
-                        QgsMessageLog.logMessage(f"Added feature with elevation {elev_float} (thickness={thickness}, remainder={remainder})", "Terrain Model", Qgis.Info)
+                        QgsMessageLog.logMessage(f"Added feature with elevation {elev_float} (step_size={step_size}, remainder={remainder})", "Terrain Model", Qgis.Info)
             
             QgsMessageLog.logMessage(f"Features added: {features_added} out of {total_features}", "Terrain Model", Qgis.Info)
-            
-            # If no features were found with the standard method, try alternative approaches
-            if features_added == 0 and total_features > 0:
-                QgsMessageLog.logMessage("No features matched the standard filtering criteria. Trying alternative approaches...", "Terrain Model", Qgis.Info)
-                
-                # Get elevation range and estimate suitable threshold
-                min_elev, max_elev = self.get_elevation_range(source_layer, elevation_field)
-                if min_elev is not None and max_elev is not None:
-                    elevation_range = max_elev - min_elev
-                    # Try to find existing elevation intervals
-                    elevation_values = set()
-                    sample_size = min(100, total_features) 
-                    for feature in source_layer.getFeatures(QgsFeatureRequest().setLimit(sample_size)):
-                        try:
-                            elevation_values.add(float(feature[elevation_field]))
-                        except (ValueError, TypeError):
-                            continue
-                    
-                    elevation_values = sorted(list(elevation_values))
-                    if len(elevation_values) > 1:
-                        # Calculate the smallest interval between existing contours
-                        intervals = [elevation_values[i+1] - elevation_values[i] for i in range(len(elevation_values)-1)]
-                        smallest_interval = min(intervals)
-                        QgsMessageLog.logMessage(f"Smallest detected contour interval: {smallest_interval}", "Terrain Model", Qgis.Info)
-                        
-                        # Try using multiples of the smallest interval that are close to the specified thickness
-                        if smallest_interval > 0:
-                            # Find the multiple closest to the requested thickness
-                            multiple = round(thickness / smallest_interval)
-                            if multiple < 1:
-                                multiple = 1
-                                
-                            effective_thickness = smallest_interval * multiple
-                            QgsMessageLog.logMessage(f"Using effective thickness of {effective_thickness} (based on contour interval of {smallest_interval})", "Terrain Model", Qgis.Info)
-                            
-                            # Reset writer
-                            del writer
-                            writer = QgsVectorFileWriter.create(
-                                temp_path, 
-                                fields, 
-                                QgsWkbTypes.LineString, 
-                                crs, 
-                                QgsProject.instance().transformContext(),
-                                options
-                            )
-                            
-                            features_added = 0
-                            # Filter using the effective thickness
-                            for feature in source_layer.getFeatures(request):
-                                try:
-                                    elev_float = float(feature[elevation_field])
-                                    remainder = elev_float % effective_thickness
-                                    if abs(remainder) < threshold or abs(effective_thickness - remainder) < threshold:
-                                        writer.addFeature(feature)
-                                        features_added += 1
-                                        if features_added <= 5:
-                                            QgsMessageLog.logMessage(f"Added feature with elevation {elev_float} using effective thickness {effective_thickness}", "Terrain Model", Qgis.Info)
-                                except (ValueError, TypeError):
-                                    continue
-                                    
-                            QgsMessageLog.logMessage(f"Features added with alternative method: {features_added} out of {total_features}", "Terrain Model", Qgis.Info)
         except Exception as e:
             import traceback
             QgsMessageLog.logMessage(f"Error during filtering: {str(e)}", "Terrain Model", Qgis.Critical)
@@ -402,7 +350,7 @@ class ContourManager:
             return None
         
         # Load the filtered layer into the project
-        layer_name = f"Filtered Contours (Thickness: {thickness}m)"
+        layer_name = f"Filtered Contours (Step Size: {int(step_size/1000)}m)"
         self.filtered_layer = QgsVectorLayer(temp_path, layer_name, "ogr")
         
         # Check if layer is valid
@@ -505,10 +453,16 @@ class ContourManager:
     
     def clean_up(self):
         """Clean up resources."""
+        # Log the cleanup
+        QgsMessageLog.logMessage("Cleaning up ContourManager resources", "Terrain Model", Qgis.Info)
+        
         # Remove filtered layer from project
         if self.filtered_layer and self.project.mapLayer(self.filtered_layer.id()):
+            QgsMessageLog.logMessage(f"Removing filtered layer: {self.filtered_layer.name()}", "Terrain Model", Qgis.Info)
             self.project.removeMapLayer(self.filtered_layer.id())
+            self.filtered_layer = None
             
         # Clean up temporary directory
         if self.temp_dir and self.temp_dir.isValid():
+            QgsMessageLog.logMessage(f"Cleaning up temporary directory: {self.temp_dir.path()}", "Terrain Model", Qgis.Info)
             self.temp_dir = None  # This should trigger cleanup 
