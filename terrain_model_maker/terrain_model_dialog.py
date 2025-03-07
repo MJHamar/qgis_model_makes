@@ -40,7 +40,6 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
     placeRectangleRequested = pyqtSignal()
     clearRectangleRequested = pyqtSignal()
     renderLayoutRequested = pyqtSignal()
-    refreshLayoutRequested = pyqtSignal()
     exportPdfRequested = pyqtSignal()
     exportCsvRequested = pyqtSignal()
     exportContoursRequested = pyqtSignal()
@@ -83,13 +82,15 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         self.txt_scale.setText("10000")
         self.txt_thickness.setText("3.0")
         
+        # Hide the refresh button as it's no longer needed
+        self.btn_refresh.setVisible(False)
+        
     def setup_connections(self):
         """Set up signal/slot connections"""
         # Button connections
         self.btn_place_rectangle.clicked.connect(self.on_place_rectangle_clicked)
         self.btn_clear_rectangle.clicked.connect(self.on_clear_rectangle_clicked)
         self.btn_render.clicked.connect(self.on_render_clicked)
-        self.btn_refresh.clicked.connect(self.on_refresh_clicked)
         self.btn_export_pdf.clicked.connect(self.on_export_pdf_clicked)
         self.btn_export_csv.clicked.connect(self.on_export_csv_clicked)
         self.btn_export_contours.clicked.connect(self.on_export_contours_clicked)
@@ -146,7 +147,6 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         # Enable/disable buttons based on whether rectangle is placed
         self.btn_clear_rectangle.setEnabled(self.has_rectangle)
         self.btn_render.setEnabled(self.has_rectangle)
-        self.btn_refresh.setEnabled(self.has_rectangle)
         
         # Export buttons are enabled only after layout is rendered
         # This will be managed by the main plugin class
@@ -229,11 +229,6 @@ class TerrainModelDialog(QtWidgets.QDialog, FORM_CLASS):
         """Handle render button click"""
         self.renderLayoutRequested.emit()
         self.lbl_status.setText("Creating layout...")
-    
-    def on_refresh_clicked(self):
-        """Handle refresh button click"""
-        self.refreshLayoutRequested.emit()
-        self.lbl_status.setText("Refreshing layout...")
     
     def on_export_pdf_clicked(self):
         """Handle export PDF button click"""

@@ -24,7 +24,7 @@ import os.path
 import math
 from datetime import datetime
 
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt, QSizeF, QRectF
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt, QSizeF, QRectF, QTimer
 from qgis.PyQt.QtGui import QIcon, QColor, QFont
 from qgis.PyQt.QtWidgets import QAction, QFileDialog, QMessageBox
 
@@ -103,6 +103,9 @@ class TerrainModelMaker:
         # Initialize layout
         self.layout = None
         self.layout_name = "TerrainModel"
+        self.layout_monitor_timer = None
+        self.previous_extent = None
+        self.sync_in_progress = False
         
         # Save state
         self.last_directory = None
@@ -224,6 +227,11 @@ class TerrainModelMaker:
         if self.rectangle_tool:
             self.iface.mapCanvas().unsetMapTool(self.rectangle_tool)
             self.rectangle_tool = None
+            
+        # Stop layout monitoring
+        if self.layout_monitor_timer:
+            self.layout_monitor_timer.stop()
+            self.layout_monitor_timer = None
 
     def run(self):
         """Run method that performs all the real work"""
@@ -240,6 +248,9 @@ class TerrainModelMaker:
             self.rubber_band.setColor(QColor(255, 0, 0, 100))
             self.rubber_band.setWidth(2)
 
+        # Connect dialog close event to stop monitoring
+        self.dlg.finished.connect(self.on_dialog_closed)
+        
         # Show the dialog
         self.dlg.show()
 
@@ -248,7 +259,6 @@ class TerrainModelMaker:
         self.dlg.placeRectangleRequested.connect(self.activate_rectangle_tool)
         self.dlg.clearRectangleRequested.connect(self.clear_rectangle)
         self.dlg.renderLayoutRequested.connect(self.create_layout)
-        self.dlg.refreshLayoutRequested.connect(self.refresh_layout)
         self.dlg.exportPdfRequested.connect(self.export_pdf)
         self.dlg.exportCsvRequested.connect(self.export_csv)
         self.dlg.exportContoursRequested.connect(self.export_contours)
@@ -264,6 +274,10 @@ class TerrainModelMaker:
         if self.rectangle and self.rectangle_center:
             # Update the rectangle with new dimensions
             self.update_rectangle_dimensions()
+            
+            # Also update the layout if it exists
+            if self.layout:
+                self.update_layout_from_rectangle()
     
     def update_rectangle_dimensions(self):
         """Update the rectangle dimensions based on current settings"""
@@ -295,6 +309,86 @@ class TerrainModelMaker:
             width, height, area = calculate_rectangle_dimensions(self.rectangle, crs)
             self.dlg.set_rectangle_info(width, height)
             self.dlg.set_status(f"Rectangle updated. Width: {width:.2f}m, Height: {height:.2f}m, Area: {area:.2f}m²")
+            
+    def update_layout_from_rectangle(self):
+        """Update the layout to match the current rectangle and settings"""
+        if not self.layout or not self.rectangle:
+            return
+            
+        try:
+            # Get current settings
+            settings = self.dlg.get_settings()
+            if not settings:
+                return
+                
+            # Temporarily pause monitoring to avoid recursive updates
+            self.sync_in_progress = True
+            
+            # Find map items
+            map_items = [item for item in self.layout.items() if isinstance(item, QgsLayoutItemMap)]
+            
+            # Store old page size for comparison
+            old_page_width = self.layout.pageCollection().pages()[0].pageSize().width()
+            old_page_height = self.layout.pageCollection().pages()[0].pageSize().height()
+            
+            # Update the page size
+            page_size = QgsLayoutSize(
+                settings['paper_width'],
+                settings['paper_height'],
+                QgsUnitTypes.LayoutMillimeters
+            )
+            self.layout.pageCollection().pages()[0].setPageSize(page_size)
+            
+            # Check if page size changed
+            page_size_changed = (old_page_width != settings['paper_width'] or 
+                                old_page_height != settings['paper_height'])
+            
+            # Update each map item
+            for map_item in map_items:
+                # Resize map to fill the entire page
+                map_item.attemptSetSceneRect(QRectF(0, 0, settings['paper_width'], settings['paper_height']))
+                
+                # Set the map extent to match our rectangle
+                map_item.setExtent(self.rectangle)
+                
+                # Set the scale
+                map_item.setScale(settings['scale'])
+                
+                # Refresh the map
+                map_item.refresh()
+                
+                # Update the previous extent
+                self.previous_extent = map_item.extent()
+            
+            # Force layout to update its view to accommodate page size change
+            if page_size_changed:
+                # Find all open layout designers
+                layout_designers = [d for d in self.iface.openLayoutDesigners() if d.layout().name() == self.layout.name()]
+                for designer in layout_designers:
+                    # Refresh the view
+                    designer.view().updateRulers()
+                    designer.view().updateSceneExtent()
+                    designer.view().updateSceneRect()
+                    designer.view().refresh()
+                    
+                    # Adjust view to display the whole page
+                    designer.zoomFull()
+                
+            # Resume monitoring
+            self.sync_in_progress = False
+            
+            self.dlg.set_status(f"Layout updated to match current rectangle and settings.")
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Error updating layout: {str(e)}", level=Qgis.Critical)
+            self.sync_in_progress = False
+            
+            # Check if layout was closed
+            if str(e).lower().find("null") >= 0 or str(e).lower().find("none") >= 0:
+                # Stop monitoring if layout was closed
+                if self.layout_monitor_timer:
+                    self.layout_monitor_timer.stop()
+                self.layout_monitor_timer = None
+                self.layout = None
         
     def activate_rectangle_tool(self):
         """Activate the rectangle selection tool"""
@@ -349,6 +443,10 @@ class TerrainModelMaker:
         # Update dialog
         self.dlg.set_rectangle_info(width, height)
         self.dlg.set_status(f"Rectangle placed. Width: {width:.2f}m, Height: {height:.2f}m, Area: {area:.2f}m²")
+        
+        # Update the layout if it exists
+        if self.layout:
+            self.update_layout_from_rectangle()
         
     def clear_rectangle(self):
         """Clear the selected rectangle"""
@@ -412,8 +510,16 @@ class TerrainModelMaker:
         project.layoutManager().addLayout(layout)
         self.layout = layout
         
+        # Store the initial extent for monitoring
+        map_items = [item for item in self.layout.items() if isinstance(item, QgsLayoutItemMap)]
+        if map_items:
+            self.previous_extent = map_items[0].extent()
+        
         # Show the layout
         self.iface.openLayoutDesigner(layout)
+        
+        # Start monitoring the layout for changes
+        self.start_layout_monitoring()
         
         # Enable export buttons
         self.dlg.btn_export_pdf.setEnabled(True)
@@ -422,62 +528,104 @@ class TerrainModelMaker:
         self.dlg.btn_export_laser.setEnabled(True)
         
         self.dlg.set_status(f"Layout created with scale 1:{target_scale}. You can now export in various formats.")
-        
-    def refresh_layout(self):
-        """Refresh the existing layout with current layers and update extent"""
-        if not self.layout:
-            self.dlg.set_status("No layout created yet. Please render a layout first.")
-            return
-        
-        # Get current settings
-        settings = self.dlg.get_settings()
-        if not settings:
-            self.dlg.set_status("Invalid settings. Please check your inputs.")
+    
+    def start_layout_monitoring(self):
+        """Start monitoring the layout for changes"""
+        # Clean up existing timer if it exists
+        if self.layout_monitor_timer:
+            self.layout_monitor_timer.stop()
+            
+        # Create new timer to check for layout changes
+        self.layout_monitor_timer = QTimer()
+        self.layout_monitor_timer.timeout.connect(self.check_layout_changes)
+        self.layout_monitor_timer.start(500)  # Check every 500ms
+    
+    def check_layout_changes(self):
+        """Check if the layout map extent has changed and update the rectangle if needed"""
+        # Skip if sync is in progress or if no layout exists
+        if not self.layout or self.sync_in_progress:
             return
             
-        try:    
-            # Find the map item
+        try:
+            # Find map items in the layout
             map_items = [item for item in self.layout.items() if isinstance(item, QgsLayoutItemMap)]
             if not map_items:
-                self.dlg.set_status("Error: No map found in layout.")
                 return
+                
+            # Get the first map item and its current extent
+            map_item = map_items[0]
+            current_extent = map_item.extent()
             
-            # Update the page size
-            page_size = QgsLayoutSize(
-                settings['paper_width'],
-                settings['paper_height'],
-                QgsUnitTypes.LayoutMillimeters
-            )
-            self.layout.pageCollection().pages()[0].setPageSize(page_size)
+            # Skip if we don't have a previous extent to compare with
+            if not self.previous_extent:
+                self.previous_extent = current_extent
+                return
                 
-            # Get the target scale from settings
-            target_scale = settings['scale']
+            # Check if the extent has changed significantly
+            x_min_diff = abs(current_extent.xMinimum() - self.previous_extent.xMinimum())
+            x_max_diff = abs(current_extent.xMaximum() - self.previous_extent.xMaximum())
+            y_min_diff = abs(current_extent.yMinimum() - self.previous_extent.yMinimum())
+            y_max_diff = abs(current_extent.yMaximum() - self.previous_extent.yMaximum())
             
-            # Update the map items - resize and set extent
-            for map_item in map_items:
-                # Resize map to fill the entire page
-                map_item.attemptSetSceneRect(QRectF(0, 0, settings['paper_width'], settings['paper_height']))
+            # If the extent has changed significantly, update the rectangle
+            threshold = 0.00001  # Small threshold to avoid unnecessary updates
+            if (x_min_diff > threshold or x_max_diff > threshold or 
+                y_min_diff > threshold or y_max_diff > threshold):
+                self.sync_in_progress = True
                 
-                # First set the extent if we have a rectangle
-                if self.rectangle:
-                    map_item.setExtent(self.rectangle)
+                # Update the rectangle with the new extent
+                self.rectangle = current_extent
                 
-                # Then explicitly set the scale - this may adjust the extent, but will ensure correct scale
-                map_item.setScale(target_scale)
-                    
-                # Refresh the map content
-                map_item.refresh()
+                # Calculate the new center point
+                center_x = (current_extent.xMaximum() + current_extent.xMinimum()) / 2
+                center_y = (current_extent.yMaximum() + current_extent.yMinimum()) / 2
+                self.rectangle_center = QgsPointXY(center_x, center_y)
                 
-            self.dlg.set_status(f"Layout refreshed with scale 1:{target_scale} and current rectangle dimensions.")
+                # Update the rubber band
+                if self.rubber_band:
+                    self.rubber_band.reset()
+                    points = [
+                        QgsPointXY(current_extent.xMinimum(), current_extent.yMinimum()),
+                        QgsPointXY(current_extent.xMaximum(), current_extent.yMinimum()),
+                        QgsPointXY(current_extent.xMaximum(), current_extent.yMaximum()),
+                        QgsPointXY(current_extent.xMinimum(), current_extent.yMaximum()),
+                        QgsPointXY(current_extent.xMinimum(), current_extent.yMinimum())
+                    ]
+                    for point in points:
+                        self.rubber_band.addPoint(point)
+                
+                # Update the rectangle tool if it exists
+                if self.rectangle_tool and isinstance(self.rectangle_tool, FixedSizeRectangleTool):
+                    self.rectangle_tool.rectangle = current_extent
+                    self.rectangle_tool.center_point = self.rectangle_center
+                
+                # Update rectangle info in dialog
+                canvas = self.iface.mapCanvas()
+                crs = canvas.mapSettings().destinationCrs()
+                width, height, area = calculate_rectangle_dimensions(current_extent, crs)
+                self.dlg.set_rectangle_info(width, height)
+                self.dlg.set_status(f"Rectangle updated from layout: {width:.2f}m × {height:.2f}m")
+                
+                # Store the new extent for next comparison
+                self.previous_extent = current_extent
+                self.sync_in_progress = False
+                
         except Exception as e:
-            # Log the error and inform the user
-            QgsMessageLog.logMessage(f"Error refreshing layout: {str(e)}", level=Qgis.Critical)
-            self.dlg.set_status(f"Error refreshing layout: {str(e)}")
+            # Log any errors
+            QgsMessageLog.logMessage(f"Error checking layout changes: {str(e)}", level=Qgis.Critical)
+            self.sync_in_progress = False
             
-            # If the layout was closed, inform the user
+            # Check if layout was closed
             if str(e).lower().find("null") >= 0 or str(e).lower().find("none") >= 0:
-                self.dlg.set_status("Layout window was closed. Please render a new layout.")
+                # Stop monitoring if layout was closed
+                if self.layout_monitor_timer:
+                    self.layout_monitor_timer.stop()
+                self.layout_monitor_timer = None
                 self.layout = None
+        
+    def refresh_layout(self):
+        """Compatibility method that now just calls update_layout_from_rectangle"""
+        self.update_layout_from_rectangle()
             
     def export_pdf(self):
         """Export the layout as PDF"""
@@ -535,6 +683,13 @@ class TerrainModelMaker:
     def set_last_directory(self, directory):
         """Set the last used directory"""
         self.last_directory = directory
+
+    def on_dialog_closed(self):
+        """Handle dialog being closed"""
+        # Stop layout monitoring when dialog is closed
+        if self.layout_monitor_timer:
+            self.layout_monitor_timer.stop()
+            self.layout_monitor_timer = None
 
 
 class FixedSizeRectangleTool(QgsMapToolEmitPoint):
